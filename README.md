@@ -123,13 +123,7 @@ pip install onnxruntime
 Example:
 
 ```powershell
-python train_mt5_extratrees_classifier_scale_invariant.py `
-  --symbol XAGUSD `
-  --timeframe M15 `
-  --bars 20000 `
-  --horizon-bars 8 `
-  --train-ratio 0.70 `
-  --output-dir output_et_XAGUSD_M15_h8
+python train_mt5_extratrees_classifier_scale_invariant.py --symbol XAGUSD --timeframe M15 --bars 80000 --horizon-bars 8 --train-ratio 0.70 --output-dir output_et_XAGUSD_M15_h8
 ```
 
 The important output is:
@@ -160,13 +154,7 @@ InpMaxBarsInTrade
 Example:
 
 ```powershell
-python train_mt5_ridge_classifier_scale_invariant.py `
-  --symbol XAGUSD `
-  --timeframe M15 `
-  --bars 20000 `
-  --horizon-bars 8 `
-  --train-ratio 0.70 `
-  --output-dir output_ridge_XAGUSD_M15_h8
+python train_mt5_ridge_classifier_scale_invariant.py --symbol XAGUSD --timeframe M15 --bars 80000 --horizon-bars 8 --train-ratio 0.70 --output-dir output_ridge_XAGUSD_M15_h8
 ```
 
 The important output is:
