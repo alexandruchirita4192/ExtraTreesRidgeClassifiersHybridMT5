@@ -1,7 +1,7 @@
 #property strict
-#property version   "1.00"
+#property version   "1.10"
 #property description "EA MT5: Hybrid ExtraTrees + Ridge classifiers ONNX, run in Strategy Tester"
-#property description "ExtraTrees generates entries; Ridge confirms/vetoes. Scale-invariant features."
+#property description "Hybrid modes: ExtraTrees lead, Ridge lead, Ridge with ExtraTrees veto. Scale-invariant features."
 
 #include <Trade/Trade.mqh>
 
@@ -14,7 +14,9 @@ enum HybridMode
    HYBRID_ET_ONLY                    = 0,
    HYBRID_RIDGE_ONLY                 = 1,
    HYBRID_ET_WITH_RIDGE_CONFIRM      = 2,
-   HYBRID_ET_WITH_RIDGE_SOFT_CONFIRM = 3
+   HYBRID_ET_WITH_RIDGE_SOFT_CONFIRM = 3,
+   HYBRID_RIDGE_WITH_ET_VETO         = 4,
+   HYBRID_RIDGE_WITH_ET_SOFT_CONFIRM = 5
   };
 
 input HybridMode InpHybridMode           = HYBRID_ET_WITH_RIDGE_SOFT_CONFIRM;
@@ -23,6 +25,10 @@ input double     InpETMinProbGap         = 0.15;
 input double     InpRidgeEntryScoreThreshold = 0.00;
 input double     InpRidgeMinScoreGap         = 0.10;
 input double     InpRidgeMinDirectionalGap   = 0.00;
+
+input double     InpETVetoProbThreshold      = 0.60;
+input double     InpETVetoProbGap            = 0.05;
+input double     InpETSoftConfirmDirectionalGap = 0.00;
 input bool   InpUseAtrStops           = true;
 input double InpStopAtrMultiple       = 1.50;
 input double InpTakeAtrMultiple       = 2.00;
@@ -398,11 +404,48 @@ bool RidgeSoftConfirmsSell(double sSell, double sFlat, double sBuy)
    return ((sSell - sBuy) >= InpRidgeMinDirectionalGap);
   }
 
+
+bool ExtraTreesStronglyVetoesBuy(double pSell, double pFlat, double pBuy)
+  {
+   double sell_gap = pSell - MathMax(pBuy, pFlat);
+   return (pSell >= InpETVetoProbThreshold && sell_gap >= InpETVetoProbGap);
+  }
+
+bool ExtraTreesStronglyVetoesSell(double pSell, double pFlat, double pBuy)
+  {
+   double buy_gap = pBuy - MathMax(pSell, pFlat);
+   return (pBuy >= InpETVetoProbThreshold && buy_gap >= InpETVetoProbGap);
+  }
+
+bool ExtraTreesSoftConfirmsBuy(double pSell, double pFlat, double pBuy)
+  {
+   return ((pBuy - pSell) >= InpETSoftConfirmDirectionalGap);
+  }
+
+bool ExtraTreesSoftConfirmsSell(double pSell, double pFlat, double pBuy)
+  {
+   return ((pSell - pBuy) >= InpETSoftConfirmDirectionalGap);
+  }
+
 SignalDirection HybridSignalFromModels(double etSell, double etFlat, double etBuy,
                                        double rSell, double rFlat, double rBuy)
   {
    SignalDirection et_signal = SignalFromExtraTrees(etSell, etFlat, etBuy);
    SignalDirection ridge_signal = SignalFromRidgeScores(rSell, rFlat, rBuy);
+
+   if(InpDebugLog)
+     {
+      Print("Hybrid raw: mode=", (int)InpHybridMode,
+            " ET(pSell=", DoubleToString(etSell, 6),
+            ", pFlat=", DoubleToString(etFlat, 6),
+            ", pBuy=", DoubleToString(etBuy, 6),
+            ", signal=", (int)et_signal,
+            ") Ridge(sSell=", DoubleToString(rSell, 6),
+            ", sFlat=", DoubleToString(rFlat, 6),
+            ", sBuy=", DoubleToString(rBuy, 6),
+            ", signal=", (int)ridge_signal,
+            ")");
+     }
 
    if(InpHybridMode == HYBRID_ET_ONLY)
       return et_signal;
@@ -410,20 +453,64 @@ SignalDirection HybridSignalFromModels(double etSell, double etFlat, double etBu
    if(InpHybridMode == HYBRID_RIDGE_ONLY)
       return ridge_signal;
 
-   if(et_signal == SIGNAL_BUY)
+   if(InpHybridMode == HYBRID_ET_WITH_RIDGE_CONFIRM ||
+      InpHybridMode == HYBRID_ET_WITH_RIDGE_SOFT_CONFIRM)
      {
-      if(InpHybridMode == HYBRID_ET_WITH_RIDGE_CONFIRM && RidgeHardConfirmsBuy(rSell, rFlat, rBuy))
-         return SIGNAL_BUY;
-      if(InpHybridMode == HYBRID_ET_WITH_RIDGE_SOFT_CONFIRM && RidgeSoftConfirmsBuy(rSell, rFlat, rBuy))
-         return SIGNAL_BUY;
+      if(et_signal == SIGNAL_BUY)
+        {
+         if(InpHybridMode == HYBRID_ET_WITH_RIDGE_CONFIRM && RidgeHardConfirmsBuy(rSell, rFlat, rBuy))
+            return SIGNAL_BUY;
+         if(InpHybridMode == HYBRID_ET_WITH_RIDGE_SOFT_CONFIRM && RidgeSoftConfirmsBuy(rSell, rFlat, rBuy))
+            return SIGNAL_BUY;
+        }
+
+      if(et_signal == SIGNAL_SELL)
+        {
+         if(InpHybridMode == HYBRID_ET_WITH_RIDGE_CONFIRM && RidgeHardConfirmsSell(rSell, rFlat, rBuy))
+            return SIGNAL_SELL;
+         if(InpHybridMode == HYBRID_ET_WITH_RIDGE_SOFT_CONFIRM && RidgeSoftConfirmsSell(rSell, rFlat, rBuy))
+            return SIGNAL_SELL;
+        }
+
+      return SIGNAL_FLAT;
      }
 
-   if(et_signal == SIGNAL_SELL)
+   if(InpHybridMode == HYBRID_RIDGE_WITH_ET_VETO)
      {
-      if(InpHybridMode == HYBRID_ET_WITH_RIDGE_CONFIRM && RidgeHardConfirmsSell(rSell, rFlat, rBuy))
+      if(ridge_signal == SIGNAL_BUY)
+        {
+         if(ExtraTreesStronglyVetoesBuy(etSell, etFlat, etBuy))
+           {
+            if(InpDebugLog)
+               Print("Ridge BUY vetoed by strong ET SELL.");
+            return SIGNAL_FLAT;
+           }
+         return SIGNAL_BUY;
+        }
+
+      if(ridge_signal == SIGNAL_SELL)
+        {
+         if(ExtraTreesStronglyVetoesSell(etSell, etFlat, etBuy))
+           {
+            if(InpDebugLog)
+               Print("Ridge SELL vetoed by strong ET BUY.");
+            return SIGNAL_FLAT;
+           }
          return SIGNAL_SELL;
-      if(InpHybridMode == HYBRID_ET_WITH_RIDGE_SOFT_CONFIRM && RidgeSoftConfirmsSell(rSell, rFlat, rBuy))
+        }
+
+      return SIGNAL_FLAT;
+     }
+
+   if(InpHybridMode == HYBRID_RIDGE_WITH_ET_SOFT_CONFIRM)
+     {
+      if(ridge_signal == SIGNAL_BUY && ExtraTreesSoftConfirmsBuy(etSell, etFlat, etBuy))
+         return SIGNAL_BUY;
+
+      if(ridge_signal == SIGNAL_SELL && ExtraTreesSoftConfirmsSell(etSell, etFlat, etBuy))
          return SIGNAL_SELL;
+
+      return SIGNAL_FLAT;
      }
 
    return SIGNAL_FLAT;
